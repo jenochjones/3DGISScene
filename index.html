@@ -110,6 +110,8 @@
             "esri/layers/FeatureLayer",
             "esri/widgets/LayerList",
             "esri/widgets/Legend",
+            "esri/identity/OAuthInfo",
+            "esri/identity/IdentityManager"
         ], (
             Map,
             SceneView,
@@ -125,8 +127,27 @@
             GraphicsLayer,
             FeatureLayer,
             LayerList,
-            Legend
+            Legend,
+            OAuthInfo, 
+            esriId
         ) => {
+
+            const info = new OAuthInfo({
+                appId: "e135431bbd77473296605dfee1f26a51",  // Replace with your actual Client ID
+                popup: false,             // Use redirect flow instead of popup
+                flowType: "auto",         // Automatically choose best flow (popup vs redirect)
+                // redirectUri: window.location.origin  // Optional; uses current site by default
+            });
+
+            esriId.registerOAuthInfos([info]);
+
+            esriId.checkSignInStatus(info.portalUrl + "/sharing")
+            .then(() => {
+                console.log("User is already signed in.");
+            })
+            .catch(() => {
+                esriId.getCredential(info.portalUrl + "/sharing");
+            });
 
             const imageryLayers = [
                 "25_04_07_IRL", "25_01_03_IRL", "24_10_04_IRL", "24_07_01_IRL",
