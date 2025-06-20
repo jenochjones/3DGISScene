@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>ESRI 3D WebScene with TimeSlider</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="https://js.arcgis.com/4.29/esri/themes/light/main.css" />
+    <style>
+        html,
+        body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+
+        #mapDiv {
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #viewDiv {
+            width: 100%;
+            flex-grow: 1;
+            position: relative;
+            /* Key for absolutely positioning children */
+            overflow: hidden;
+        }
+
+        #timeSliderDiv {
+            position: absolute;
+            bottom: 10px;
+            /* distance from bottom of viewDiv */
+            left: 50%;
+            transform: translateX(-50%);
+            width: 70%;
+            z-index: 10;
+        }
+
+
+        #bottomWindowDiv {
+            height: 200px;
+            background: #f0f0f0;
+            border-top: 2px solid #ccc;
+            position: relative;
+            transition: height 0.2s;
+            display: flex;
+            align-items: flex-start;
+        }
+
+        #resizeHandle {
+            height: 6px;
+            cursor: ns-resize;
+            background: #ccc;
+            width: 100%;
+            position: absolute;
+            top: 0;
+            z-index: 10;
+        }
+
+        #toggleTab {
+            position: absolute;
+            right: 0;
+            top: -20px;
+            background: #0079c1;
+            color: white;
+            padding: 3px 10px;
+            font-size: 12px;
+            border-radius: 5px 5px 0 0;
+            cursor: pointer;
+            user-select: none;
+            z-index: 20;
+        }
+    </style>
+
+</head>
+
+<body>
+    <div id="mapDiv">
+        <div id="viewDiv">
+            <div id="timeSliderDiv"></div>
+        </div>
+        <div id="bottomWindowDiv">
+            <div id="resizeHandle"></div>
+            <div id="toggleTab">▼</div>
+            <div id="elevationProfileContainer" style="width: 100%; height: 100%; overflow: auto;"></div>
+        </div>
+    </div>
+
+
+
+    <script src="https://js.arcgis.com/4.29/"></script>
+    <script>
+        require([
+            "esri/Map",
+            "esri/views/SceneView",
+            "esri/layers/ImageryTileLayer",
+            "esri/layers/ElevationLayer",
+            "esri/widgets/BasemapGallery",
+            "esri/widgets/Expand",
+            "esri/widgets/Home",
+            "esri/widgets/TimeSlider",
+            "esri/Ground",
+            "esri/widgets/ElevationProfile",
+            "esri/widgets/Sketch",
+            "esri/layers/GraphicsLayer",
+            "esri/layers/FeatureLayer",
+            "esri/widgets/LayerList",
+            "esri/widgets/Legend",
+        ], (
+            Map,
+            SceneView,
+            ImageryTileLayer,
+            ElevationLayer,
+            BasemapGallery,
+            Expand,
+            Home,
+            TimeSlider,
+            Ground,
+            ElevationProfile,
+            Sketch,
+            GraphicsLayer,
+            FeatureLayer,
+            LayerList,
+            Legend
+        ) => {
+
+            const imageryLayers = [
+                "25_04_07_IRL", "25_01_03_IRL", "24_10_04_IRL", "24_07_01_IRL",
+                "24_03_18_IRL", "24_01_02_IRL", "23_10_04_IRL", "23_07_14_IRL",
+                "23_05_09_IRL", "23_01_09_IRL", "22_10_03_IRL", "22_01_01_IRL",
+                "21_04_06_IRL", "21_01_04_IRL", "19_12_31_IRL", "19_07_05_IRL",
+                "19_01_05_IRL", "18_06_26_IRL"
+            ];
+
+            const groundLayers = [
+                "25_04_07_IRL_DEM", "25_01_03_IRL_DEM", "24_10_04_IRL_DEM", "24_07_01_IRL_DEM",
+                "24_03_18_IRL_DEM", "24_01_02_IRL_DEM", "23_10_04_IRL_DEM", "23_07_14_IRL_DEM",
+                "23_05_09_IRL_DEM", "23_01_09_IRL_DEM", "22_10_03_IRL_DEM", "22_07_26_IRL_DEM", "22_01_01_IRL_DEM",
+                "21_04_06_IRL_DEM", "21_01_04_IRL_DEM", "20_10_04_IRL_DEM", "20_06_30_IRL_DEM", "19_12_31_IRL_DEM", "19_07_05_IRL_DEM",
+                "19_01_05_IRL_DEM", "18_06_26_IRL_DEM"
+            ];
+
+            function parseLayerDate(layer) {
+                const [yy, mm, dd] = layer.split('_');
+                const fullYear = parseInt(yy, 10) > 50 ? '19' + yy : '20' + yy;
+                return new Date(parseInt(fullYear), parseInt(mm) - 1, parseInt(dd));
+            }
+
+            const sortedLayers = imageryLayers.slice().sort((a, b) => {
+                return parseLayerDate(a) - parseLayerDate(b);
+            });
+
+            const tileLayerDict = {};
+            const groundLayerDict = {};
+            const monthSet = new Set();
+
+            for (let i = 0; i < sortedLayers.length; i++) {
+                const layer = sortedLayers[i];
+                const nextLayer = sortedLayers[i + 1];
+
+                const startDateObj = parseLayerDate(layer);
+                const endDateObj = nextLayer ? parseLayerDate(nextLayer) : new Date();
+
+                const startDateStr = startDateObj.toLocaleDateString('en-CA');
+                const endDateStr = endDateObj.toLocaleDateString('en-CA');
+
+                const labelDate = startDateObj.toLocaleDateString("en-US", {
+                    year: "numeric",
+                    month: "2-digit",
+                    day: "2-digit"
+                });
+
+                tileLayerDict[`IRL Drone Imagery ${labelDate}`] = {
+                    url: `https://tiledimageservices7.arcgis.com/G2oolWuAl7TJufGL/arcgis/rest/services/${layer}/ImageServer`,
+                    startDate: startDateStr,
+                    endDate: endDateStr,
+                    displayDate: startDateObj
+                };
+
+                monthSet.add(startDateObj.toLocaleDateString('en-CA'));
+            }
+
+            for (const demName of groundLayers) {
+                const dateObj = parseLayerDate(demName.replace('_DEM', ''));
+                const labelDate = dateObj.toLocaleDateString("en-US", {
+                    year: "numeric", month: "2-digit", day: "2-digit"
+                });
+
+                const startDateStr = dateObj.toLocaleDateString('en-CA');
+
+                const nextDEM = groundLayers.find(next => parseLayerDate(next.replace('_DEM', '')) > dateObj);
+                const endDateStr = nextDEM
+                    ? parseLayerDate(nextDEM.replace('_DEM', '')).toLocaleDateString('en-CA')
+                    : new Date().toLocaleDateString('en-CA');
+
+                groundLayerDict[labelDate] = {
+                    url: `https://tiles.arcgis.com/tiles/G2oolWuAl7TJufGL/arcgis/rest/services/${demName}/ImageServer`,
+                    start: new Date(startDateStr),
+                    end: new Date(endDateStr),
+                    elevationLayer: new ElevationLayer({
+                        url: `https://tiles.arcgis.com/tiles/G2oolWuAl7TJufGL/arcgis/rest/services/${demName}/ImageServer`
+                    })
+                };
+            }
+
+            const dateList = Array.from(monthSet)
+                .map(str => new Date(parseInt(str.split('-')[0]), parseInt(str.split('-')[1]) - 1, parseInt(str.split('-')[2])))
+                .sort((a, b) => a - b);
+
+            const layers = [];
+            for (const [name, info] of Object.entries(tileLayerDict)) {
+                const layer = new ImageryTileLayer({
+                    url: info.url,
+                    title: name,
+                    visible: false
+                });
+
+                info.start = new Date(info.startDate);
+                info.end = new Date(info.endDate);
+                info.layer = layer;
+                layers.push(layer);
+            }
+
+            const map = new Map({
+                basemap: "topo",
+                ground: new Ground({
+                    layers: [
+                        new ElevationLayer({
+                            url: "https://elevation3d.arcgis.com/arcgis/rest/services/WorldElevation3D/Terrain3D/ImageServer"
+                        })
+                    ]
+                }),
+                layers: layers
+            });
+
+            const view = new SceneView({
+                container: "viewDiv",
+                map: map,
+                camera: {
+                    position: {
+                        x: -112.077,
+                        y: 40.203,
+                        z: 2500
+                    },
+                    tilt: 45
+                }
+            });
+
+            // Add Home button
+            const homeWidget = new Home({ view });
+            view.ui.add(homeWidget, "top-left");
+
+            // Add Basemap Gallery in Expand
+            const basemapGallery = new BasemapGallery({ view });
+            const bgExpand = new Expand({
+                view,
+                content: basemapGallery,
+                expandTooltip: "Change Basemap"
+            });
+            view.ui.add(bgExpand, "top-right");
+
+            // Add TimeSlider when view is ready
+            view.when(() => {
+                const startTime = dateList[0];
+                const endTime = dateList[dateList.length - 1];
+
+                const timeSlider = new TimeSlider({
+                    container: "timeSliderDiv",
+                    view: view,
+                    mode: "instant",
+                    fullTimeExtent: {
+                        start: startTime,
+                        end: endTime
+                    },
+                    values: [endTime],
+                    stops: {
+                        dates: dateList
+                    },
+                    playRate: 1000
+                });
+
+                timeSlider.watch("timeExtent", () => {
+                    const selectedDate = timeSlider.timeExtent.end;
+                    updateLayersByDate(selectedDate);
+                });
+
+                // Add ElevationProfile widget inside bottomWindowDiv
+                const profileWidget = new ElevationProfile({
+                    view: view,
+                    container: "elevationProfileContainer",
+                    profiles: [
+                        {
+                            type: "ground" // basic ground elevation
+                        }
+                    ],
+                    visibleElements: {
+                        legend: true,
+                        selectButton: true,
+                        sketchButton: true,
+                        clearButton: true
+                    }
+                });
+
+                // Create a layer for user drawings
+                const graphicsLayer = new GraphicsLayer({
+                    title: "User Drawings"
+                });
+                map.add(graphicsLayer);
+
+                // Add the Sketch widget
+                const sketch = new Sketch({
+                    layer: graphicsLayer,
+                    view: view,
+                    availableCreateTools: ["point", "polyline", "polygon", "rectangle", "circle"],
+                    visibleElements: {
+                        createTools: {
+                            point: true,
+                            polyline: true,
+                            polygon: true,
+                            rectangle: true,
+                            circle: true
+                        },
+                        selectionTools: {
+                            "rectangle-selection": true,
+                            "lasso-selection": true
+                        },
+                        settingsMenu: true,
+                        undoRedoMenu: true
+                    }
+                });
+
+                // Add Sketch widget in an expandable panel
+                const sketchExpand = new Expand({
+                    view: view,
+                    content: sketch,
+                    expandTooltip: "Draw on map"
+                });
+                view.ui.add(sketchExpand, "top-left");
+
+                // Add the layer list widget
+                const layerList = new LayerList({
+                    view: view
+                });
+                const layerListExpand = new Expand({
+                    view: view,
+                    content: layerList,
+                    expandTooltip: "Layer List"
+                });
+                view.ui.add(layerListExpand, "top-right");
+
+                // Add Legend
+                const legend = new Legend({
+                    view: view
+                });
+                const legendExpand = new Expand({
+                    view: view,
+                    content: legend,
+                    expandTooltip: "Legend"
+                });
+                view.ui.add(legendExpand, "top-right");
+
+                // Add the Gas Well Inspections layer as 3D red cylinders
+                const gasWellLayer = new FeatureLayer({
+                    url: "https://services7.arcgis.com/G2oolWuAl7TJufGL/arcgis/rest/services/IRL_Gas_Well_Inspections/FeatureServer/7",
+                    elevationInfo: {
+                        mode: "on-the-ground" // Places symbols on terrain
+                    },
+                    renderer: {
+                        type: "simple",
+                        symbol: {
+                            type: "point-3d",
+                            symbolLayers: [
+                                {
+                                    type: "object",
+                                    resource: { primitive: "cylinder" },
+                                    material: { color: "red" },
+                                    height: 2,     // Meters
+                                    width: 0.5,       // Meters
+                                    anchor: "bottom"
+                                }
+                            ]
+                        }
+                    },
+                    title: "Gas Well Inspections"
+                });
+
+                map.add(gasWellLayer);
+
+
+                // Add the Gas Collection Pipes as blue 2D lines on the ground
+                const gasPipesLayer = new FeatureLayer({
+                    url: "https://services7.arcgis.com/G2oolWuAl7TJufGL/arcgis/rest/services/IRL_Gas_Collection_Pipes/FeatureServer/6",
+                    elevationInfo: {
+                        mode: "on-the-ground" // Aligns the lines with the terrain surface
+                    },
+                    renderer: {
+                        type: "simple",
+                        symbol: {
+                            type: "line-3d", // Required for SceneView
+                            symbolLayers: [
+                                {
+                                    type: "path",
+                                    material: { color: "blue" },
+                                    width: 0.25,            // meters (real-world units)
+                                    cap: "round",          // optional: round line ends
+                                    join: "round"          // optional: round line corners
+                                }
+                            ]
+                        }
+                    },
+                    title: "Gas Collection Pipes"
+                });
+
+                map.add(gasPipesLayer);
+
+
+
+                // Initial update
+                updateLayersByDate(endTime);
+            });
+
+            function updateLayersByDate(date) {
+                for (const info of Object.values(tileLayerDict)) {
+                    info.layer.visible = date >= info.start && date <= info.end;
+                }
+
+                const groundLayersToKeep = map.ground.layers.filter(layer =>
+                    layer.url.includes("WorldElevation3D")
+                );
+
+                for (const groundInfo of Object.values(groundLayerDict)) {
+                    if (date >= groundInfo.start && date <= groundInfo.end) {
+                        groundLayersToKeep.push(groundInfo.elevationLayer);
+                        break;
+                    }
+                }
+
+                map.ground.layers.removeAll();
+                map.ground.layers.addMany(groundLayersToKeep);
+            }
+
+        });
+
+
+        // Expand/Collapse bottomWindowDiv
+        const bottomWindow = document.getElementById("bottomWindowDiv");
+        const toggleTab = document.getElementById("toggleTab");
+        let isCollapsed = false;
+        let lastHeight = bottomWindow.offsetHeight || 200;
+
+        toggleTab.addEventListener("click", () => {
+            if (isCollapsed) {
+                bottomWindow.style.height = lastHeight + "px";
+                toggleTab.textContent = "▼";
+            } else {
+                lastHeight = bottomWindow.offsetHeight;
+                bottomWindow.style.height = "0px";
+                toggleTab.textContent = "▲";
+            }
+            isCollapsed = !isCollapsed;
+        });
+
+        // Drag-to-resize functionality
+        const resizeHandle = document.getElementById("resizeHandle");
+        let isDragging = false;
+        let startY = 0;
+        let startHeight = 0;
+
+        resizeHandle.addEventListener("mousedown", (e) => {
+            isDragging = true;
+            startY = e.clientY;
+            startHeight = bottomWindow.offsetHeight;
+            document.body.style.cursor = "ns-resize";
+            e.preventDefault();
+        });
+
+        document.addEventListener("mousemove", (e) => {
+            if (!isDragging) return;
+            const dy = startY - e.clientY;
+            let newHeight = startHeight + dy;
+            const maxHeight = window.innerHeight * 0.9;
+            const minHeight = 40;
+
+            newHeight = Math.max(minHeight, Math.min(maxHeight, newHeight));
+            bottomWindow.style.height = newHeight + "px";
+            isCollapsed = newHeight < 50;
+            toggleTab.textContent = isCollapsed ? "▼" : "▲";
+        });
+
+        document.addEventListener("mouseup", () => {
+            if (isDragging) {
+                isDragging = false;
+                document.body.style.cursor = "default";
+            }
+        });
+
+    </script>
+</body>
+
+</html>
